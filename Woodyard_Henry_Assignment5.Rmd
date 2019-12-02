@@ -1,0 +1,291 @@
+---
+title: "Homework 5 Notebook - Henry Woodyard"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+
+
+### Run this only if the machine learning packages have not yet been installed.
+```{r}
+#install.packages("caret")
+#install.packages("randomForest")
+#install.packages("RANN")
+#install.packages("gbm")
+```
+
+### Loading packages and data
+```{r}
+library(caret)
+library(RANN)
+library(randomForest)
+library(ggplot2)
+library(gridExtra)
+library(gbm)
+data(scat)
+```
+
+
+### Question 1: Set the Species column as the target/outcome and convert it to numeric. (5 points)
+
+```{r}
+scat$Species <- as.factor(scat$Species)
+```
+
+### Question 2: Remove the Month, Year, Site, Location features. (5 points)
+
+```{r}
+removal <- c("Month", "Year", "Site", "Location")
+scat <- scat[,-which(colnames(scat) %in% removal)]; rm(removal)
+```
+
+### 3. Check if any values are null. If there are, impute missing values using KNN. (10 points)
+
+```{r}
+print("Missing values before imputing")
+missing <- colSums(is.na(scat))
+cols_with_missing <- which(missing > 0)
+cols_to_impute <- scat[,cols_with_missing]
+print(missing)
+
+imputeValues <- preProcess(cols_to_impute, method = c("knnImpute", "center", "scale"))
+scat[,cols_with_missing] <- predict(imputeValues, scat[, cols_with_missing])
+
+print("Missing values after imputing")
+colSums(is.na(scat))
+rm(imputeValues, cols_to_impute, cols_with_missing, missing)
+```
+```{r}
+imputeValues <- preProcess(scat, method = c("knnImpute", "center", "scale"))
+scat <- predict(imputeValues, scat)
+```
+
+### 4. Converting every categorical variable to numerical (if needed). (5 points)
+
+```{r}
+str(scat)
+# All variables are numeric or integer. Conversion not needed.
+```
+
+### 5. With a seed of 100, 75% training, 25% testing. Build the following models: randomforest, neural net, naive bayes and GBM
+
+#### a. For these models display a)model summarization and b) plot variable of importance, for the predictions (use the prediction set) display c) confusion matrix (60 points)
+
+Set random seed to 100 and partition the data.
+
+```{r}
+set.seed(100)
+index <- createDataPartition(scat$Species, p = .75, list = FALSE)
+trainSet <- scat[index,]
+testSet <- scat[-index,]
+rm(index)
+```
+
+Save the names of our outcome and predictor variables for easy reference.
+
+```{r}
+outcomeName <- "Species"
+predictors <- names(scat)[names(scat) != outcomeName]
+```
+
+#### Train a random forest model.
+
+```{r}
+model_rf <- train(x = trainSet[,predictors], 
+                  y = trainSet[,outcomeName], 
+                  method = 'rf', 
+                  importance = T, 
+                  verbose = F)
+print(model_rf)
+plot(varImp(object = model_rf), main = "Random Forest - Variable Importance")
+predict_rf <- predict.train(model_rf, testSet[,predictors])
+results_rf <- confusionMatrix(predict_rf, testSet[,outcomeName])
+print(results_rf)
+```
+
+#### Train a neural network.
+
+```{r}
+model_nn <- train(x = trainSet[,predictors], 
+                  y = trainSet[,outcomeName], 
+                  method = 'nnet', 
+                  importance = T, 
+                  trace = F)
+print(model_nn)
+# NN importance is reported by default in a way that throws an error. Converting to a dataframe and removing the "overall" column fixes this.
+imp <- varImp(model_nn)
+imp$importance <- as.data.frame(imp$importance)[,-1]
+plot(imp, main = "Neural Network - Variable Importance")
+
+predict_nn <- predict.train(model_nn, testSet[,predictors])
+results_nn <- confusionMatrix(predict_nn, testSet[,outcomeName])
+print(results_nn)
+```
+
+#### Train a naive bayes model.
+
+```{r}
+model_nb <- train(x = trainSet[,predictors], 
+                  y = trainSet[,outcomeName], 
+                  method = 'naive_bayes')
+print(model_nb)
+plot(varImp(object = model_nb), main = "Naive Bayes - Variable Importance")
+predict_nb <- predict.train(model_nb, testSet[,predictors])
+results_nb <- confusionMatrix(predict_nb, testSet[,outcomeName])
+print(results_nb)
+```
+
+#### Train a Gradient Boosting Machines (GBM) model. 
+
+```{r}
+model_gbm <- train(x = trainSet[,predictors], 
+                  y = trainSet[,outcomeName], 
+                  method = 'gbm', 
+                  verbose = F)
+print(model_gbm)
+plot(varImp(object = model_gbm), main = "GBM - Variable Importance")
+predict_gbm <- predict.train(model_gbm, testSet[,predictors])
+results_gbm <- confusionMatrix(predict_gbm, testSet[,outcomeName])
+print(results_gbm)
+```
+
+### 6. For the BEST performing models of each (randomforest, neural net, naive bayes and gbm) create and display a data frame that has the following columns: ExperimentName, accuracy, kappa. Sort the data frame by accuracy. (15 points)
+
+*Note: I'm a little confused about your phrasing here. You say for the "best performing models of each", but when predicting, the model already uses the best parameters (i.e. bestTune). Perhaps you wanted us to get the accuracy from the model directly, rather than from the prediction; however, it seems more robust to use the accuracy from the testing and thus I'm using that.*
+
+Using the results from the confusion matrices earlier, I take the accuracy and kappa for each model and combine them into a dataframe. 
+
+
+```{r}
+results_all <- as.data.frame(rbind(results_nn$overall[c("Accuracy", "Kappa")], 
+                             results_nb$overall[c("Accuracy", "Kappa")], 
+                             results_rf$overall[c("Accuracy", "Kappa")], 
+                             results_gbm$overall[c("Accuracy", "Kappa")]))
+results_all <- cbind(c("Neural Net", "Naive Bayes", "Random Forest", "GBM"),
+                     results_all)
+colnames(results_all)[1] <- "ExperimentName"
+print(results_all[order(results_all$Accuracy, decreasing = T),])
+```
+
+### 7. Tune the GBM model using tune length = 20 and: a) print the model summary and b) plot the models. (20 points)
+
+This gives warning for zero variance in the scrape variable. I assume this is because some random subsamples result in scrape being constant. Annoying to see but empirically fine.
+
+```{r}
+model_gbm_tuned <- train(x = trainSet[,predictors], 
+                         y = trainSet[,outcomeName], 
+                         method = 'gbm',
+                         tuneLength = 20,
+                         verbose = F)
+print(model_gbm_tuned)
+plot(model_gbm_tuned)
+predict_gbm_tuned <- predict.train(model_gbm_tuned, testSet[,predictors])
+results_gbm_tuned <- confusionMatrix(predict_gbm_tuned, testSet[,outcomeName])
+```
+### 8. Using GGplot and gridExtra to plot all variable of importance plots into one single plot. (10 points)
+
+Create ggplots for variable importance of each model, and combine them using grid.arrange(). This looks a bit messy in a notebook - should best be viewed as its own window.
+
+```{r}
+rf_imp <- ggplot(data = varImp(object = model_rf))+ggtitle("Random Forest - Variable of Importance")
+
+nn_imp <- ggplot(data = imp)+ggtitle("Neural Net - Variable of Importance")
+
+nb_imp <- ggplot(data = varImp(object = model_nb))+ggtitle("Naive Bayes - Variable of Importance")
+
+gbm_imp <- ggplot(data = varImp(object = model_gbm))+ggtitle("GBM - Variable of Importance")
+
+grid.arrange(rf_imp, nn_imp, nb_imp, gbm_imp, ncol = 2)
+```
+### 9. Which model performs the best? and why do you think this is the case? Can we accurately predict species on this dataset? (10 points)
+
+From comparing the accuracy of models earlier, we see that the neural network performs the best with an accuracy of about 85%. While we would like to have a higher accuracy, this is still significantly better than random guessing. This is decent considering our training set has only 83 observations. Also, because our test set has only 27 observations, the accuracy can only be measured in multiples of 1/27. Thus the other models all have an accuracy of .815.
+
+### 10. Graduate Student questions:
+
+#### a. Using feature selection with rfe in caret and the repeatedcv method: Find the top 3 predictors and build the same models as in 6 and 8 with the same parameters. (20 points)
+
+```{r}
+control <- rfeControl(functions = rfFuncs, 
+                      method = "repeatedcv",
+                      repeats = 3, 
+                      verbose = F)
+Scat_Pred_Profile <- rfe(trainSet[,predictors],
+                         trainSet[,outcomeName],
+                         rfeControl = control,
+                         sizes = c(3, 6, 9, 12))
+print(Scat_Pred_Profile)
+```
+Our best variables are CN, d13C, and d15N. Now we restrict to only those features and train the appropriate models.
+
+```{r}
+predictors <- c("CN", "d13C", "d15N")
+model_rf_rfe <- train(x = trainSet[,predictors], 
+                      y = trainSet[,outcomeName], 
+                      method = 'rf', 
+                      importance = T, 
+                      verbose = F)
+model_nn_rfe <- train(x = trainSet[,predictors], 
+                      y = trainSet[,outcomeName], 
+                      method = 'nnet', 
+                      importance = T, 
+                      trace = F)
+model_nb_rfe <- train(x = trainSet[,predictors], 
+                      y = trainSet[,outcomeName], 
+                      method = 'naive_bayes')
+model_gbm_rfe <- train(x = trainSet[,predictors], 
+                       y = trainSet[,outcomeName], 
+                       method = 'gbm', 
+                       verbose = F)
+model_gbm_tuned_rfe <- train(x = trainSet[,predictors], 
+                             y = trainSet[,outcomeName], 
+                             method = 'gbm', 
+                             tuneLength = 20, 
+                             verbose = F)
+```
+#### b. Create a dataframe that compares the non-feature selected models ( the same as on 7) and add the best BEST performing models of each (randomforest, neural net, naive bayes and gbm) and display the data frame that has the following columns: ExperimentName, accuracy, kappa. Sort the data frame by accuracy. (40 points)
+
+```{r}
+results_gbm_rfe <- confusionMatrix(predict.train(model_gbm_rfe,
+                                             testSet[,predictors]),
+                                   testSet[,outcomeName])
+results_gbm_tuned_rfe <- confusionMatrix(predict.train(model_gbm_tuned_rfe,
+                                             testSet[,predictors]),
+                                         testSet[,outcomeName])
+results_nn_rfe <- confusionMatrix(predict.train(model_nn_rfe,
+                                             testSet[,predictors]),
+                                  testSet[,outcomeName])
+results_nb_rfe <- confusionMatrix(predict.train(model_nb_rfe,
+                                             testSet[,predictors]),
+                                  testSet[,outcomeName])
+results_rf_rfe <- confusionMatrix(predict.train(model_rf_rfe,
+                                             testSet[,predictors]),
+                                  testSet[,outcomeName])
+
+results_all_rfe <- as.data.frame(rbind(results_gbm_rfe$overall[c("Accuracy","Kappa")], 
+                     results_gbm_tuned_rfe$overall[c("Accuracy", "Kappa")], 
+                     results_nn_rfe$overall[c("Accuracy", "Kappa")], 
+                     results_rf_rfe$overall[c("Accuracy", "Kappa")],
+                     results_nb_rfe$overall[c("Accuracy", "Kappa")]))
+results_all_rfe <- cbind(c("GBM - RFE",
+                       "GBM - RFE - Tuned",
+                       "Neural Net - RFE",
+                       "Random Forest - RFE",
+                       "Naive Bayes - RFE"),
+                     results_all_rfe)
+colnames(results_all_rfe)[1] <- "ExperimentName"
+results_all <- rbind(results_all, results_all_rfe)
+results_all <- results_all[order(results_all$Accuracy, decreasing = TRUE),]
+print(results_all)
+```
+
+
+
+
+#### c. Which model performs the best? and why do you think this is the case? Can we accurately predict species on this dataset? (10 points)
+
+Once again, the neural network performs the best when comparing predictions to the test data. Using RFE actually reduced the performance of all of our models, which could be because of our low sample size. My answer holds from before - 85% accuracy is pretty good and would allow for fairly accurate prediction.
+
+
